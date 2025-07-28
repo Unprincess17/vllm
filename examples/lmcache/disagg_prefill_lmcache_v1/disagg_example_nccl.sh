@@ -79,7 +79,7 @@ wait_for_server() {
 
 main() {
 <<EOF
-    check_hf_token
+    #check_hf_token
     check_num_gpus
     ensure_python_library_installed lmcache
     ensure_python_library_installed nixl
@@ -94,19 +94,19 @@ EOF
     echo "Launching prefiller, decoder and proxy..."
     echo "Please check prefiller.log, decoder.log and proxy.log for logs."
 
-    bash disagg_vllm_launcher.sh prefiller \
+    bash nccl_vllm_launcher.sh prefiller \
         > >(tee prefiller.log) 2>&1 &
     prefiller_pid=$!
     PIDS+=($prefiller_pid)
 
-    bash disagg_vllm_launcher.sh decoder  \
+    bash nccl_vllm_launcher.sh decoder  \
         > >(tee decoder.log)  2>&1 &
     decoder_pid=$!
     PIDS+=($decoder_pid)
 
-    python3 disagg_proxy_server_concurrent.py \
+    python3 disagg_proxy_server.py \
         --host localhost \
-        --port 8000 \
+        --port 9000 \
         --prefiller-host localhost \
         --prefiller-port 8100 \
         --decoder-host localhost \
@@ -117,18 +117,32 @@ EOF
 
     wait_for_server 8100
     wait_for_server 8200
-    wait_for_server 8000
+    wait_for_server 9000
 
     echo "All servers are up. Starting benchmark..."
 
     # begin benchmark
     cd ../../../benchmarks/
-    python benchmark_serving.py --port 8000 --seed $(date +%s) \
+    dataset_name="sonnet"
+    dataset_path="sonnet_4x.txt"
+    num_prompts=10
+    prefix_len=50
+    input_len=2048
+    output_len=10
+
+    echo "" > sonnet_4x.txt
+    for _ in {1..4}
+    do
+      cat sonnet.txt >> sonnet_4x.txt
+    done
+
+    python benchmark_serving.py --port 8200 --seed $(date +%s) \
         --model LLM-Research/Llama-3.2-3B-Instruct \
-        --dataset-name sonnet --random-input-len 7500 --random-output-len 200 \
-	--dataset-path sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 10 \
-	--sonnet-prefix-len 50 \
-        --num-prompts 1 --burstiness 1 --request-rate 10 | tee benchmark.log
+        --dataset-name $dataset_name --dataset-path $dataset_path \
+       	--sonnet-input-len $input_len --sonnet-output-len $output_len \
+	--sonnet-prefix-len $prefix_len \
+        --num-prompts $num_prompts --burstiness 1 --request-rate 100 | tee prefill.log
+
 
     echo "Benchmarking done. Cleaning up..."
 

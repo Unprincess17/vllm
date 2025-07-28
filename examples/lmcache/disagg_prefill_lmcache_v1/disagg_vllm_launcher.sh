@@ -8,13 +8,15 @@ if [[ $# -lt 1 ]]; then
 fi
 
 if [[ $# -eq 1 ]]; then
-    echo "Using default model: meta-llama/Llama-3.1-8B-Instruct"
-    MODEL="meta-llama/Llama-3.1-8B-Instruct"
+    echo "Using default model: LLM-Research/Llama-3.2-3B-Instruct"
+    MODEL="LLM-Research/Llama-3.2-3B-Instruct"
 else
     echo "Using model: $2"
     MODEL=$2
 fi
 
+export LMCACHE_LOG_LEVEL=DEBUG
+#export LMCACHE_USE_LAYERWISE=True
 
 if [[ $1 == "prefiller" ]]; then
     # Prefiller listens on port 8100
@@ -25,7 +27,7 @@ if [[ $1 == "prefiller" ]]; then
         LMCACHE_USE_EXPERIMENTAL=True \
         VLLM_ENABLE_V1_MULTIPROCESSING=1 \
         VLLM_WORKER_MULTIPROC_METHOD=spawn \
-        CUDA_VISIBLE_DEVICES=0 \
+        CUDA_VISIBLE_DEVICES=2 \
         vllm serve $MODEL \
         --port 8100 \
         --disable-log-requests \
@@ -43,7 +45,7 @@ elif [[ $1 == "decoder" ]]; then
         LMCACHE_USE_EXPERIMENTAL=True \
         VLLM_ENABLE_V1_MULTIPROCESSING=1 \
         VLLM_WORKER_MULTIPROC_METHOD=spawn \
-        CUDA_VISIBLE_DEVICES=1 \
+        CUDA_VISIBLE_DEVICES=3 \
         vllm serve $MODEL \
         --port 8200 \
         --disable-log-requests \
