@@ -126,7 +126,7 @@ EOF
     python benchmark_serving.py --port 8000 --seed $(date +%s) \
         --model LLM-Research/Llama-3.2-3B-Instruct \
         --dataset-name sonnet --random-input-len 7500 --random-output-len 200 \
-	--dataset-path sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 10 \
+	--dataset-path sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 \
 	--sonnet-prefix-len 50 \
         --num-prompts 1 --burstiness 1 --request-rate 10 | tee benchmark.log
 
