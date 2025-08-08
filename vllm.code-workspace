@@ -1,0 +1,81 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../LMCache"
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "/root/LMCache/.venv/bin/python",
+		"python.terminal.activateEnvironment": true
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"name": "[Prefiller] vllm",
+				"type": "debugpy",
+				"request": "launch",
+				"module": "vllm.entrypoints.openai.api_server",
+				"cwd": "/root/vllm",
+				"console": "integratedTerminal",
+				"justMyCode": false,
+				"env": {
+					"UCX_TLS": "cuda_ipc,cuda_copy,tcp",
+					"LMCACHE_CONFIG_FILE": "/root/vllm/examples/lmcache/disagg_prefill_lmcache_v1/configs/lmcache-prefiller-config.yaml",
+					"LMCACHE_USE_EXPERIMENTAL": "True",
+					"VLLM_ENABLE_V1_MULTIPROCESSING": "1",
+					"VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+					"CUDA_VISIBLE_DEVICES": "2"
+				},
+				"args": [
+					"--model", "LLM-Research/Llama-3.2-1B-Instruct",
+					"--port", "8100",
+					"--disable-log-requests",
+					"--enforce-eager",
+					"--gpu-memory-utilization", "0.6",
+					"--kv-transfer-config",
+					"{\"kv_connector\":\"LMCacheConnectorV2\",\"kv_role\":\"kv_producer\",\"kv_connector_extra_config\": {\"discard_partial_chunks\": false, \"lmcache_rpc_port\": \"producer1\"}}",
+				]
+			},
+			{
+				"name": "[Decoder] vllm",
+				"type": "debugpy",
+				"request": "launch",
+				"module": "vllm.entrypoints.openai.api_server",
+				"cwd": "/root/vllm",
+				"console": "integratedTerminal",
+				"justMyCode": false,
+				"env": {
+					"UCX_TLS": "cuda_ipc,cuda_copy,tcp",
+					"LMCACHE_CONFIG_FILE": "/root/vllm/examples/lmcache/disagg_prefill_lmcache_v1/configs/lmcache-decoder-config.yaml",
+					"LMCACHE_USE_EXPERIMENTAL": "True",
+					"VLLM_ENABLE_V1_MULTIPROCESSING": "1",
+					"VLLM_WORKER_MULTIPROC_METHOD": "spawn",
+					"CUDA_VISIBLE_DEVICES": "3"
+				},
+				"args": [
+					"--model", "LLM-Research/Llama-3.2-1B-Instruct",
+					"--port", "8200",
+					"--disable-log-requests",
+					"--enforce-eager",
+					"--gpu-memory-utilization", "0.6",
+					"--kv-transfer-config",
+					"{\"kv_connector\":\"LMCacheConnectorV2\",\"kv_role\":\"kv_producer\",\"kv_connector_extra_config\": {\"discard_partial_chunks\": false, \"lmcache_rpc_port\": \"producer1\"}}",
+				]
+			}
+		],
+		"compounds": [
+			{
+				"name": "[p/d] vllm",
+				"configurations": [
+					"[Prefiller] vllm",
+					"[Decoder] vllm"
+				],
+				"stopAll": true
+			}
+		]
+	}
+}
