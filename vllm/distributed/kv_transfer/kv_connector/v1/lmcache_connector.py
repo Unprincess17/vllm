@@ -108,7 +108,7 @@ class LMCacheConnectorV1(KVConnectorBase_V1):
             external KV cache beyond what is already computed.
         """
         return self._lmcache_engine.get_num_new_matched_tokens(
-            request, num_computed_tokens), False
+            request, num_computed_tokens)
 
     def update_state_after_alloc(self, request: "Request",
                                  blocks: "KVCacheBlocks",
@@ -150,13 +150,9 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         self._lmcache_engine = LMCacheConnectorV1Impl(vllm_config, role, self)
         
         # Track layer-wise loading state
-        self._layerwise_enabled = self._check_layerwise_support()
-        if self._layerwise_enabled:
-            logger.info("✅ Layer-wise transfers enabled with LayerAwareLMCacheEngine")
-        else:
-            logger.info("⚠️ Falling back to standard transfers (LayerAwareLMCacheEngine not available)")
-
-    def _check_layerwise_support(self) -> bool:
+        self._layeraware_enabled = self._check_layeraware_support()
+        
+    def _check_layeraware_support(self) -> bool:
         """Check if LayerAwareLMCacheEngine is available."""
         try:
             from lmcache.experimental.cache_engine import LayerAwareLMCacheEngine
@@ -177,7 +173,7 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
             forward_context (ForwardContext): the forward context.
             **kwargs: additional arguments for the load operation
         """
-        if self._layerwise_enabled:
+        if self._layeraware_enabled:
             logger.debug("🚀 Starting layer-wise KV loading...")
         
         self._lmcache_engine.start_load_kv(forward_context, **kwargs)
@@ -194,19 +190,7 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         Args:
             layer_name: the name of that layer (e.g. "layers.0", "layers.1")
         """
-        if self._layerwise_enabled:
-            layer_id = self._parse_layer_id(layer_name)
-            logger.debug(f"⏳ Waiting for layer {layer_id} ({layer_name}) to be ready...")
-            
-            # Use enhanced layer waiting if available
-            if hasattr(self._lmcache_engine, 'wait_for_layer_load_enhanced'):
-                self._lmcache_engine.wait_for_layer_load_enhanced(layer_name, layer_id)
-            else:
-                # Fall back to standard method
-                self._lmcache_engine.wait_for_layer_load(layer_name)
-        else:
-            # Standard behavior for non-layerwise engines
-            self._lmcache_engine.wait_for_layer_load(layer_name)
+        self._lmcache_engine.wait_for_layer_load(layer_name)
 
     def _parse_layer_id(self, layer_name: str) -> int:
         """Parse layer ID from layer name (e.g. 'layers.0' -> 0).
@@ -236,10 +220,6 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
             attn_metadata (AttentionMetadata): the attention metadata.
             **kwargs: additional arguments for the save operation.
         """
-        if self._layerwise_enabled:
-            layer_id = self._parse_layer_id(layer_name)
-            logger.debug(f"💾 Saving layer {layer_id} ({layer_name}) progressively...")
-        
         self._lmcache_engine.save_kv_layer(layer_name, kv_layer, attn_metadata, **kwargs)
 
     def wait_for_save(self):
@@ -258,13 +238,8 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         num_computed_tokens: int,
     ) -> tuple[int, bool]:
         """
-        Enhanced for layer-wise transfers: Check if ANY layers are available
-        for this request. This is the key method that enables early scheduling.
-        
-        The core insight: Instead of waiting for ALL layers to be ready,
-        we check if the first few layers are available and signal the scheduler
-        to start async loading. The worker-side wait_for_layer_load() will
-        handle the progressive availability.
+        Get number of new tokens that can be loaded from the
+        external KV cache beyond the num_computed_tokens.
         
         Args:
             request (Request): the request object.
@@ -275,55 +250,9 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
             - num_tokens_available: number of tokens that can be loaded
             - should_load_async: True if layer-wise loading should begin
         """
-        # Get the base number of matched tokens from LMCache
-        num_matched_tokens = self._lmcache_engine.get_num_new_matched_tokens(
+        return self._lmcache_engine.get_num_new_matched_tokens(
             request, num_computed_tokens)
         
-        if num_matched_tokens == 0:
-            return 0, False
-            
-        # Enhanced logic for layer-wise transfers
-        if self._layerwise_enabled:
-            # Check if we can start layer-wise loading
-            if self._can_start_layerwise_loading(request):
-                logger.debug(
-                    f"✅ Layer-wise loading available for request {request.request_id}: "
-                    f"{num_matched_tokens} tokens can be loaded progressively"
-                )
-                return num_matched_tokens, True
-            else:
-                # No layers ready yet, don't start loading
-                logger.debug(f"⏳ No layers ready yet for request {request.request_id}")
-                return 0, False
-        else:
-            # Fall back to original behavior for non-layerwise engines
-            return num_matched_tokens, False
-
-    def _can_start_layerwise_loading(self, request: "Request") -> bool:
-        """
-        Check if layer-wise loading can start for the given request.
-        
-        This method determines if at least the first layer (layer-0) is
-        available, which is the minimum requirement to start progressive loading.
-        
-        Args:
-            request: The vLLM request object
-            
-        Returns:
-            True if layer-wise loading can begin
-        """
-        # Check if the LMCache engine supports layer availability checking
-        if hasattr(self._lmcache_engine, 'has_any_layers_ready'):
-            try:
-                return self._lmcache_engine.has_any_layers_ready(request)
-            except Exception as e:
-                logger.debug(f"Error checking layer readiness: {e}")
-                return False
-        
-        # Fallback: assume we can start if we have layer-wise support
-        # In practice, you might want to implement a simple layer-0 check here
-        return True
-
     def update_state_after_alloc(self, request: "Request",
                                  blocks: "KVCacheBlocks",
                                  num_external_tokens: int):
@@ -331,7 +260,7 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         Update KVConnector state after block allocation.
         Enhanced for layer-wise transfer coordination.
         """
-        if self._layerwise_enabled and num_external_tokens > 0:
+        if self._layeraware_enabled and num_external_tokens > 0:
             logger.debug(
                 f"📋 Allocated {num_external_tokens} tokens for layer-wise loading "
                 f"of request {request.request_id}"
@@ -351,7 +280,7 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         meta = self._lmcache_engine.build_connector_meta(scheduler_output)
         
         # Enhanced metadata for layer-wise transfers
-        if self._layerwise_enabled:
+        if self._layeraware_enabled:
             # Add layer-wise specific metadata if needed
             # This could include layer readiness information, transfer priorities, etc.
             if hasattr(meta, '__dict__'):
@@ -362,25 +291,3 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
                 ])
         
         return meta
-
-    # ==============================
-    # Layer-wise specific methods
-    # ==============================
-    
-    def get_layerwise_status(self) -> dict:
-        """
-        Get the current status of layer-wise transfers.
-        
-        Returns:
-            Dictionary with layer-wise transfer status information
-        """
-        status = {
-            "layerwise_enabled": self._layerwise_enabled,
-            "connector_version": "LMCacheConnectorV2",
-            "supports_progressive_loading": True,
-        }
-        
-        if hasattr(self._lmcache_engine, 'supports_layerwise_loading'):
-            status["engine_layerwise_support"] = self._lmcache_engine.supports_layerwise_loading()
-        
-        return status

@@ -25,8 +25,11 @@
 				"env": {
 					"UCX_TLS": "cuda_ipc,cuda_copy,tcp",
 					"LMCACHE_CONFIG_FILE": "/root/vllm/examples/lmcache/disagg_prefill_lmcache_v1/configs/lmcache-prefiller-config.yaml",
+					"LMCACHE_LOG_LEVEL": "DEBUG",
 					"LMCACHE_USE_EXPERIMENTAL": "True",
+					"LMCACHE_USE_LAYERAWARE": "True",
 					"VLLM_ENABLE_V1_MULTIPROCESSING": "1",
+					"VLLM_USE_V1": "1",
 					"VLLM_WORKER_MULTIPROC_METHOD": "spawn",
 					"CUDA_VISIBLE_DEVICES": "2"
 				},
@@ -51,8 +54,11 @@
 				"env": {
 					"UCX_TLS": "cuda_ipc,cuda_copy,tcp",
 					"LMCACHE_CONFIG_FILE": "/root/vllm/examples/lmcache/disagg_prefill_lmcache_v1/configs/lmcache-decoder-config.yaml",
+					"LMCACHE_LOG_LEVEL": "DEBUG",
 					"LMCACHE_USE_EXPERIMENTAL": "True",
+					"LMCACHE_USE_LAYERAWARE": "True",
 					"VLLM_ENABLE_V1_MULTIPROCESSING": "1",
+					"VLLM_USE_V1": "1",
 					"VLLM_WORKER_MULTIPROC_METHOD": "spawn",
 					"CUDA_VISIBLE_DEVICES": "3"
 				},
@@ -63,13 +69,13 @@
 					"--enforce-eager",
 					"--gpu-memory-utilization", "0.6",
 					"--kv-transfer-config",
-					"{\"kv_connector\":\"LMCacheConnectorV2\",\"kv_role\":\"kv_producer\",\"kv_connector_extra_config\": {\"discard_partial_chunks\": false, \"lmcache_rpc_port\": \"producer1\"}}",
+					"{\"kv_connector\":\"LMCacheConnectorV2\",\"kv_role\":\"kv_consumer\",\"kv_connector_extra_config\": {\"discard_partial_chunks\": false, \"lmcache_rpc_port\": \"consumer1\", \"pd_disaggregated\": true}}",
 				]
 			}
 		],
 		"compounds": [
 			{
-				"name": "[p/d] vllm",
+				"name": "[P/D] vllm",
 				"configurations": [
 					"[Prefiller] vllm",
 					"[Decoder] vllm"

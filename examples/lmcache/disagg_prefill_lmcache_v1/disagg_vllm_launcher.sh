@@ -8,15 +8,17 @@ if [[ $# -lt 1 ]]; then
 fi
 
 if [[ $# -eq 1 ]]; then
-    echo "Using default model: LLM-Research/Llama-3.2-3B-Instruct"
-    MODEL="LLM-Research/Llama-3.2-3B-Instruct"
+    echo "Using default model: LLM-Research/Llama-3.2-1B-Instruct"
+    MODEL="LLM-Research/Llama-3.2-1B-Instruct"
 else
     echo "Using model: $2"
     MODEL=$2
 fi
 
+export VLLM_USE_V1=1
 export LMCACHE_LOG_LEVEL=DEBUG
 #export LMCACHE_USE_LAYERWISE=True
+export LMCACHE_USE_LAYERAWARE=True
 
 if [[ $1 == "prefiller" ]]; then
     # Prefiller listens on port 8100
@@ -32,6 +34,7 @@ if [[ $1 == "prefiller" ]]; then
         --port 8100 \
         --disable-log-requests \
         --enforce-eager \
+        --gpu-memory-utilization 0.6 \
         --kv-transfer-config \
         '{"kv_connector":"LMCacheConnectorV2","kv_role":"kv_producer","kv_connector_extra_config": {"discard_partial_chunks": false, "lmcache_rpc_port": "producer1"}}'
 
@@ -50,12 +53,13 @@ elif [[ $1 == "decoder" ]]; then
         --port 8200 \
         --disable-log-requests \
         --enforce-eager \
+        --gpu-memory-utilization 0.6 \
         --kv-transfer-config \
         '{"kv_connector":"LMCacheConnectorV2","kv_role":"kv_consumer","kv_connector_extra_config": {"discard_partial_chunks": false, "lmcache_rpc_port": "consumer1"}}'
 
 
 else
     echo "Invalid role: $1"
-    echo "Should be either prefill, decode"
+    echo "Should be either prefiller, decoder"
     exit 1
 fi
