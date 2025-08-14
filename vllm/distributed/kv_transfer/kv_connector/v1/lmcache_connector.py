@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import torch
 from lmcache.integration.vllm.vllm_v1_adapter import LMCacheConnectorV1Impl
@@ -85,6 +85,19 @@ class LMCacheConnectorV1(KVConnectorBase_V1):
         This prevents overwrites of paged KV buffer before saving done.
         """
         self._lmcache_engine.wait_for_save()
+
+    def publish_first_decode_logits(self, req_id: str, logits: torch.Tensor) -> None:
+        """
+        Publish the last prompt token logits for a request to enable
+        zero-compute first decode on the decoder worker.
+        """
+        self._lmcache_engine.publish_first_decode_logits(req_id, logits)
+
+    def try_consume_first_decode_logits(self, req_id: str) -> Optional[torch.Tensor]:
+        """
+        Try to retrieve the first decode logits for a request.
+        """
+        return self._lmcache_engine.try_consume_first_decode_logits(req_id)
 
     # ==============================
     # Scheduler-side methods
@@ -229,6 +242,19 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         """
         self._lmcache_engine.wait_for_save()
 
+    def publish_first_decode_logits(self, req_id: str, logits: torch.Tensor) -> None:
+        """
+        Publish the last prompt token logits for a request to enable
+        zero-compute first decode on the decoder worker.
+        """
+        self._lmcache_engine.publish_first_decode_logits(req_id, logits)
+
+    def try_consume_first_decode_logits(self, req_id: str) -> Optional[torch.Tensor]:
+        """
+        Try to retrieve the first decode logits for a request.
+        """
+        return self._lmcache_engine.try_consume_first_decode_logits(req_id)
+
     # ==============================
     # Scheduler-side methods
     # ==============================
@@ -252,6 +278,12 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         """
         return self._lmcache_engine.get_num_new_matched_tokens(
             request, num_computed_tokens)
+
+    def has_first_decode_logits(self, request: "Request") -> bool:
+        """
+        Check if first decode logits are available for a request.
+        """
+        return self._lmcache_engine.has_first_decode_logits(request)
         
     def update_state_after_alloc(self, request: "Request",
                                  blocks: "KVCacheBlocks",

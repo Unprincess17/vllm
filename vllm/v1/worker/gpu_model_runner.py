@@ -1067,7 +1067,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, IntermediateTensors]:
-
+        """Execute the model with optimized logits bypass logic.
+        
+        This method has been optimized to avoid regenerating attention metadata
+        for requests with precomputed logits by leveraging the scheduler-based
+        approach where the scheduler identifies requests with precomputed logits
+        and includes their IDs in the SchedulerOutput.
+        """
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             if not has_kv_transfer_group():
@@ -1080,101 +1086,127 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         attn_metadata, logits_indices, spec_decode_metadata = (
             self._prepare_inputs(scheduler_output))
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        if (self.use_cuda_graph
-                and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
-            # Use piecewise CUDA graphs.
-            # Add padding to the batch size.
-            num_input_tokens = self.vllm_config.pad_for_cudagraph(
-                num_scheduled_tokens)
-        else:
-            # Eager mode.
-            # Pad tokens to multiple of tensor_parallel_size when
-            # enabled collective fusion for SP
-            tp_size = self.vllm_config.parallel_config.tensor_parallel_size
-            if self.vllm_config.compilation_config.pass_config. \
-                enable_sequence_parallelism and tp_size > 1:
-                from vllm.utils import round_up
-                num_input_tokens = round_up(num_scheduled_tokens, tp_size)
+        
+        # 使用调度器优化后的方法，直接从SchedulerOutput获取预计算logits的请求
+        # 这避免了在execute_model中重新生成attention metadata
+        precomputed_logits_req_ids = scheduler_output.precomputed_logits_req_ids
+        
+        # 如果所有请求都有预计算的 logits，完全跳过前向传播
+        if precomputed_logits_req_ids and len(precomputed_logits_req_ids) == len(self.input_batch.req_ids):
+            logger.info(f"All {len(self.input_batch.req_ids)} requests have first decode logits, "
+                      "achieving true zero-compute first decode")
+            
+            # 直接从KV connector获取预计算的 logits
+            logits_list = []
+            if has_kv_transfer_group():
+                kv_connector = get_kv_transfer_group()
+                for req_id in self.input_batch.req_ids:
+                    provided_logits = kv_connector.try_consume_first_decode_logits(req_id)
+                    if provided_logits is not None:
+                        logits_list.append(provided_logits)
+                    else:
+                        # This should not happen if scheduler correctly identified all requests
+                        raise RuntimeError(f"Expected precomputed logits for request {req_id} but none found")
+                
+                logits = torch.stack(logits_list)
+                
+                # 处理 KV connector 的潜在传输
+                finished_sending, finished_recving = (
+                    self.get_finished_kv_transfers(scheduler_output))
             else:
-                num_input_tokens = num_scheduled_tokens
-
-        # _prepare_inputs may reorder the batch, so we must gather multi
-        # modal outputs after that to ensure the correct order
-        if self.is_multimodal_model:
-            # Run the multimodal encoder if any.
-            self._execute_mm_encoder(scheduler_output)
-            mm_embeds = self._gather_mm_embeddings(scheduler_output)
+                # This should not happen if we have precomputed_logits_req_ids but no KV connector
+                raise RuntimeError("Precomputed logits requests found but no KV transfer group available")
+            
+            hidden_states = None  # 没有实际的 hidden states
+            
         else:
-            mm_embeds = []
-
-        if self.is_multimodal_model and get_pp_group().is_first_rank:
-            # NOTE(woosuk): To unify token ids and soft tokens (vision
-            # embeddings), we always use embeddings (rather than token ids)
-            # as input to the multimodal model, even when the input is text.
-            input_ids = self.input_ids[:num_scheduled_tokens]
-            if mm_embeds:
-                inputs_embeds = self.model.get_input_embeddings(
-                    input_ids, mm_embeds)
+            # 处理混合批次或完全计算批次
+            # 由于调度器已经处理了预计算logits的请求，我们只需要对所有请求进行前向传播
+            
+            if self.is_multimodal_model:
+                # Run the multimodal encoder if any.
+                self._execute_mm_encoder(scheduler_output)
+                mm_embeds = self._gather_mm_embeddings(scheduler_output)
             else:
-                inputs_embeds = self.model.get_input_embeddings(input_ids)
-            # TODO(woosuk): Avoid the copy. Optimize.
-            self.inputs_embeds[:num_scheduled_tokens].copy_(inputs_embeds)
-            inputs_embeds = self.inputs_embeds[:num_input_tokens]
-            input_ids = None
-        else:
-            # For text-only models, we use token ids as input.
-            # While it is possible to use embeddings as input just like the
-            # multimodal models, it is not desirable for performance since
-            # then the embedding layer is not included in the CUDA graph.
-            input_ids = self.input_ids[:num_input_tokens]
-            inputs_embeds = None
-        if self.uses_mrope:
-            positions = self.mrope_positions[:, :num_input_tokens]
-        else:
-            positions = self.positions[:num_input_tokens]
+                mm_embeds = []
 
-        if get_pp_group().is_first_rank:
-            intermediate_tensors = None
-        else:
-            assert intermediate_tensors is not None
-            assert self.intermediate_tensors is not None
-            for k, v in intermediate_tensors.items():
-                self.intermediate_tensors[k][:num_input_tokens].copy_(
-                    v[:num_input_tokens], non_blocking=True)
-            intermediate_tensors = IntermediateTensors({
-                k: v[:num_input_tokens]
-                for k, v in self.intermediate_tensors.items()
-            })
+            if self.is_multimodal_model and get_pp_group().is_first_rank:
+                # NOTE(woosuk): To unify token ids and soft tokens (vision
+                # embeddings), we always use embeddings (rather than token ids)
+                # as input to the multimodal model, even when the input is text.
+                if mm_embeds:
+                    inputs_embeds = self.model.get_input_embeddings(
+                        self.input_ids[:num_scheduled_tokens], mm_embeds)
+                else:
+                    inputs_embeds = self.model.get_input_embeddings(
+                        self.input_ids[:num_scheduled_tokens])
+                # TODO(woosuk): Avoid the copy. Optimize.
+                self.inputs_embeds[:num_scheduled_tokens].copy_(inputs_embeds)
+                inputs_embeds = self.inputs_embeds[:num_scheduled_tokens]
+                input_ids = None
+            else:
+                # For text-only models, we use token ids as input.
+                # While it is possible to use embeddings as input just like the
+                # multimodal models, it is not desirable for performance since
+                # then the embedding layer is not included in the CUDA graph.
+                input_ids = self.input_ids[:num_scheduled_tokens]
+                inputs_embeds = None
 
-        # Run the decoder.
-        # Use persistent buffers for CUDA graphs.
-        with set_forward_context(attn_metadata,
-                                 self.vllm_config,
-                                 num_tokens=num_input_tokens):
-            self.maybe_setup_kv_connector(scheduler_output)
+            # Handle pipeline intermediate tensors
+            if get_pp_group().is_first_rank:
+                intermediate_tensors = None
+            else:
+                assert intermediate_tensors is not None
+                assert self.intermediate_tensors is not None
+                for k, v in intermediate_tensors.items():
+                    self.intermediate_tensors[k][:num_scheduled_tokens].copy_(
+                        v[:num_scheduled_tokens], non_blocking=True)
+                intermediate_tensors = IntermediateTensors({
+                    k: v[:num_scheduled_tokens]
+                    for k, v in self.intermediate_tensors.items()
+                })
 
-            model_output = self.model(
-                input_ids=input_ids,
-                positions=positions,
-                intermediate_tensors=intermediate_tensors,
-                inputs_embeds=inputs_embeds,
-            )
+            # Execute the model
+            with set_forward_context(attn_metadata,
+                                    self.vllm_config,
+                                    num_tokens=num_scheduled_tokens):
+                self.maybe_setup_kv_connector(scheduler_output)
 
-            self.maybe_wait_for_kv_save()
-            finished_sending, finished_recving = (
-                self.get_finished_kv_transfers(scheduler_output))
+                model_output = self.model(
+                    input_ids=input_ids,
+                    positions=(self.mrope_positions[:, :num_scheduled_tokens] 
+                              if self.uses_mrope else self.positions[:num_scheduled_tokens]),
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
+                )
 
-        if self.use_aux_hidden_state_outputs:
-            hidden_states, aux_hidden_states = model_output
-        else:
-            hidden_states = model_output
+                self.maybe_wait_for_kv_save()
+                finished_sending, finished_recving = (
+                    self.get_finished_kv_transfers(scheduler_output))
 
-        if not get_pp_group().is_last_rank:
-            # For mid-pipeline stages, return the hidden states.
-            return hidden_states
+            if self.use_aux_hidden_state_outputs:
+                hidden_states, aux_hidden_states = model_output
+            else:
+                hidden_states = model_output
 
-        sample_hidden_states = hidden_states[logits_indices]
-        logits = self.model.compute_logits(sample_hidden_states, None)
+            if not get_pp_group().is_last_rank:
+                return hidden_states
+
+            # Compute logits for all requests (scheduler handles precomputed logits)
+            sample_hidden_states = hidden_states[logits_indices]
+            logits = self.model.compute_logits(sample_hidden_states, None)
+            
+            # 如果有预计算logits的请求，替换对应的logits
+            if precomputed_logits_req_ids and has_kv_transfer_group():
+                kv_connector = get_kv_transfer_group()
+                for i, req_id in enumerate(self.input_batch.req_ids):
+                    if req_id in precomputed_logits_req_ids:
+                        provided_logits = kv_connector.try_consume_first_decode_logits(req_id)
+                        if provided_logits is not None:
+                            logits[i] = provided_logits
+                        else:
+                            # Log warning but continue with computed logits
+                            logger.warning(f"Expected precomputed logits for request {req_id} but none found")
 
         # Apply structured output bitmasks if present
         if scheduler_output.grammar_bitmask is not None:
@@ -1212,6 +1244,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
             sampler_output.sampled_token_ids = output_token_ids
 
+        # 处理部分预填充的请求
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
         discard_sampled_tokens_req_indices = []
@@ -1238,7 +1271,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Compute prompt logprobs if needed.
         prompt_logprobs_dict = self._get_prompt_logprobs_dict(
-            hidden_states[:num_scheduled_tokens],
+            hidden_states[:num_scheduled_tokens] if hidden_states is not None else None,
             scheduler_output,
         )
 
@@ -1290,7 +1323,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if spec_decode_metadata is None:
                 # input_ids can be None for multimodal models.
                 target_token_ids = self.input_ids[:num_scheduled_tokens]
-                target_positions = positions[:num_scheduled_tokens]
+                target_positions = (self.mrope_positions[:, :num_scheduled_tokens] 
+                                  if self.uses_mrope else self.positions[:num_scheduled_tokens])
                 if self.use_aux_hidden_state_outputs:
                     target_hidden_states = torch.cat(
                         [h[:num_scheduled_tokens] for h in aux_hidden_states],
@@ -1316,7 +1350,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     num_rejected_tokens,
                 )
                 target_token_ids = self.input_ids[token_indices]
-                target_positions = positions[token_indices]
+                target_positions = (self.mrope_positions[:, token_indices] 
+                                  if self.uses_mrope else self.positions[token_indices])
                 if self.use_aux_hidden_state_outputs:
                     target_hidden_states = torch.cat(
                         [h[token_indices] for h in aux_hidden_states], dim=-1)
@@ -1337,7 +1372,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
             spec_token_ids = draft_token_ids.tolist()
 
-        # Clear KVConnector state after all KVs are generated.
+        # Clear KVConnector state
         if has_kv_transfer_group():
             get_kv_transfer_group().clear_connector_metadata()
 
@@ -1523,6 +1558,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             offset = self.query_start_loc_np[req_idx].item()
             prompt_hidden_states = hidden_states[offset:offset + num_logits]
             logits = self.model.compute_logits(prompt_hidden_states, None)
+            
+            # Publish first decode logits for zero-compute decode if this is the last chunk
+            if (req_id in completed_prefill_reqs and 
+                has_kv_transfer_group() and
+                num_logits > 0):
+                # Get the last prompt token's hidden state and compute its logits
+                last_hidden = prompt_hidden_states[-1:]
+                last_logits = self.model.compute_logits(last_hidden, None).squeeze(0)
+                get_kv_transfer_group().publish_first_decode_logits(req_id, last_logits)
 
             # Get the "target" tokens for each index. For prompt at index i,
             # the token at prompt index i+1 is the "sampled" token we want

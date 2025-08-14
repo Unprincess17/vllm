@@ -18,6 +18,9 @@ The class provides the following primitives:
 
         save_kv_layer() - starts saving KV for layer i (maybe async)
         wait_for_save() - blocks until all saves are done
+        
+        publish_first_decode_logits() - save first decode logits for transfer
+        try_consume_first_decode_logits() - retrieve first decode logits if available
 """
 
 import enum
@@ -175,6 +178,31 @@ class KVConnectorBase_V1(ABC):
         """
         pass
 
+    def publish_first_decode_logits(self, req_id: str, logits: torch.Tensor) -> None:
+        """
+        Publish the last prompt token logits for a request to enable
+        zero-compute first decode on the decoder worker.
+        
+        Args:
+            req_id: The request ID
+            logits: Last prompt token logits tensor [vocab_size]
+        """
+        # Default implementation: no-op
+        pass
+
+    def try_consume_first_decode_logits(self, req_id: str) -> Optional[torch.Tensor]:
+        """
+        Try to retrieve the first decode logits for a request.
+        
+        Args:
+            req_id: The request ID
+            
+        Returns:
+            Logits tensor [vocab_size] if available, None otherwise
+        """
+        # Default implementation: return None
+        return None
+
     def get_finished(
         self, finished_req_ids: set[str]
     ) -> tuple[Optional[set[str]], Optional[set[str]]]:
@@ -215,6 +243,19 @@ class KVConnectorBase_V1(ABC):
               asynchronously (between scheduler steps).
         """
         pass
+
+    def has_first_decode_logits(self, request: "Request") -> bool:
+        """
+        Check if first decode logits are available for a request.
+        
+        Args:
+            request: The request object
+            
+        Returns:
+            True if first decode logits are available
+        """
+        # Default implementation: return False
+        return False
 
     @abstractmethod
     def update_state_after_alloc(self, request: "Request",

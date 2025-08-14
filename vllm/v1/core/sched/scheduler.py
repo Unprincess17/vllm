@@ -204,6 +204,13 @@ class Scheduler(SchedulerInterface):
                 num_new_tokens,
                 self.max_model_len - request.num_computed_tokens)
 
+            # Check if first decode logits are available for zero-compute first decode
+            has_logits = (self.connector is not None and 
+                         self.connector.has_first_decode_logits(request))
+            if has_logits:
+                # Mark this request as having precomputed logits
+                request.has_first_decode_logits = True
+
             # Schedule encoder inputs.
             encoder_inputs_to_schedule = None
             new_encoder_budget = encoder_budget
@@ -213,7 +220,7 @@ class Scheduler(SchedulerInterface):
                      request, request.num_computed_tokens, num_new_tokens,
                      encoder_budget)
 
-            if num_new_tokens == 0:
+            if num_new_tokens == 0 and not has_logits:
                 # The request cannot be scheduled because one of the following
                 # reasons:
                 # 1. No new tokens to schedule. This may happen when PP>1 and
@@ -383,7 +390,16 @@ class Scheduler(SchedulerInterface):
                         num_new_tokens = (
                             self.scheduler_config.long_prefill_token_threshold)
                     num_new_tokens = min(num_new_tokens, token_budget)
-                    assert num_new_tokens > 0
+                    
+                    # Check if first decode logits are available for zero-compute first decode
+                    has_logits = (self.connector is not None and 
+                                 self.connector.has_first_decode_logits(request))
+                    if has_logits:
+                        # Mark this request as having precomputed logits
+                        request.has_first_decode_logits = True
+                    
+                    if not has_logits:
+                        assert num_new_tokens > 0
 
                     # Schedule encoder inputs.
                     if request.has_encoder_inputs:
@@ -513,6 +529,13 @@ class Scheduler(SchedulerInterface):
                 resumed_from_preemption=False,
             ) for req in scheduled_running_reqs
         ]
+        
+        # Collect request IDs that have precomputed logits
+        precomputed_logits_req_ids = set()
+        for req in scheduled_new_reqs + scheduled_resumed_reqs + scheduled_running_reqs:
+            if req.has_first_decode_logits:
+                precomputed_logits_req_ids.add(req.request_id)
+        
         scheduler_output = SchedulerOutput(
             scheduled_new_reqs=new_reqs_data,
             scheduled_cached_reqs=resumed_reqs_data + running_reqs_data,
@@ -529,6 +552,7 @@ class Scheduler(SchedulerInterface):
             free_encoder_input_ids=self.encoder_cache_manager.get_freed_ids(),
             structured_output_request_ids=structured_output_request_ids,
             grammar_bitmask=grammar_bitmask,
+            precomputed_logits_req_ids=precomputed_logits_req_ids,
         )
 
         # NOTE(Kuntai): this function is designed for multiple purposes:

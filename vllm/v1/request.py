@@ -54,6 +54,9 @@ class Request:
         self.num_computed_tokens = 0
         self.cache_salt: Optional[str] = cache_salt
 
+        # First decode logits availability flag for zero-compute decode
+        self.has_first_decode_logits = False
+
         # Multi-modal related
         self.mm_positions = multi_modal_placeholders or []
         self.mm_inputs = multi_modal_inputs or []

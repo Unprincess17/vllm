@@ -149,5 +149,12 @@ class SchedulerOutput:
     # the bitmask for the whole batch
     grammar_bitmask: Optional[npt.NDArray[np.int32]]
 
+    # Request IDs that have precomputed logits and should bypass computation
+    precomputed_logits_req_ids: set[str] = None
+
     # KV Cache Connector metadata.
     kv_connector_metadata: Optional[KVConnectorMetadata] = None
+
+    def __post_init__(self):
+        if self.precomputed_logits_req_ids is None:
+            self.precomputed_logits_req_ids = set()
