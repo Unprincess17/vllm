@@ -29,6 +29,7 @@ class NewRequestData:
     block_ids: list[int]
     num_computed_tokens: int
     lora_request: Optional[LoRARequest]
+    has_first_decode_logits: bool
 
     @classmethod
     def from_request(
@@ -46,6 +47,7 @@ class NewRequestData:
             block_ids=block_ids,
             num_computed_tokens=request.num_computed_tokens,
             lora_request=request.lora_request,
+            has_first_decode_logits=request.has_first_decode_logits,
         )
 
     def __repr__(self):
@@ -58,7 +60,8 @@ class NewRequestData:
                 f"sampling_params={self.sampling_params},"
                 f"block_ids={self.block_ids},"
                 f"num_computed_tokens={self.num_computed_tokens},"
-                f"lora_request={self.lora_request}"
+                f"lora_request={self.lora_request},"
+                f"has_first_decode_logits={self.has_first_decode_logits}"
                 ")")
 
     # Version of __repr__ with the prompt data obfuscated
@@ -72,7 +75,8 @@ class NewRequestData:
                 f"sampling_params={self.sampling_params},"
                 f"block_ids={self.block_ids},"
                 f"num_computed_tokens={self.num_computed_tokens},"
-                f"lora_request={self.lora_request}"
+                f"lora_request={self.lora_request},"
+                f"has_first_decode_logits={self.has_first_decode_logits}"
                 ")")
 
 

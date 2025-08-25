@@ -200,6 +200,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Request states.
         self.requests: dict[str, CachedRequestState] = {}
+        # Track requests that have already had first decode logits published
+        self.published_first_decode_logits: set[str] = set()
         # Persistent batch.
         self.input_batch = InputBatch(
             max_num_reqs=self.max_num_reqs,
@@ -318,6 +320,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         for req_id in scheduler_output.finished_req_ids:
             self.requests.pop(req_id, None)
             self.encoder_cache.pop(req_id, None)
+            # Clean up tracking of published first decode logits
+            self.published_first_decode_logits.discard(req_id)
         # Remove the finished requests from the persistent batch.
         # NOTE(woosuk): There could be an edge case where finished_req_ids and
         # scheduled_req_ids overlap. This happens when a request is aborted and
@@ -1075,53 +1079,55 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         and includes their IDs in the SchedulerOutput.
         """
         self._update_states(scheduler_output)
-        if not scheduler_output.total_num_scheduled_tokens:
-            if not has_kv_transfer_group():
-                # Return empty ModelRunnerOutput if there's no work to do.
-                return EMPTY_MODEL_RUNNER_OUTPUT
-
-            return self.kv_connector_no_forward(scheduler_output)
-
-        # Prepare the decoder inputs.
-        attn_metadata, logits_indices, spec_decode_metadata = (
-            self._prepare_inputs(scheduler_output))
-        num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
-        
-        # 使用调度器优化后的方法，直接从SchedulerOutput获取预计算logits的请求
-        # 这避免了在execute_model中重新生成attention metadata
         precomputed_logits_req_ids = scheduler_output.precomputed_logits_req_ids
-        
-        # 如果所有请求都有预计算的 logits，完全跳过前向传播
-        if precomputed_logits_req_ids and len(precomputed_logits_req_ids) == len(self.input_batch.req_ids):
-            logger.info(f"All {len(self.input_batch.req_ids)} requests have first decode logits, "
-                      "achieving true zero-compute first decode")
-            
-            # 直接从KV connector获取预计算的 logits
-            logits_list = []
-            if has_kv_transfer_group():
-                kv_connector = get_kv_transfer_group()
-                for req_id in self.input_batch.req_ids:
-                    provided_logits = kv_connector.try_consume_first_decode_logits(req_id)
-                    if provided_logits is not None:
-                        logits_list.append(provided_logits)
-                    else:
-                        # This should not happen if scheduler correctly identified all requests
-                        raise RuntimeError(f"Expected precomputed logits for request {req_id} but none found")
+        # The total_num_scheduled_tokens is 0 for
+        # - first_decode_logits
+        # - fully computed requests
+        if not scheduler_output.total_num_scheduled_tokens:
+            if not precomputed_logits_req_ids or len(precomputed_logits_req_ids) != self.input_batch.num_reqs:
+                if not has_kv_transfer_group():
+                    # Return empty ModelRunnerOutput if there's no work to do.
+                    return EMPTY_MODEL_RUNNER_OUTPUT
+
+                return self.kv_connector_no_forward(scheduler_output)
+            else: # 如果所有请求都有预计算的 logits, 可以跳过前向传播
+                logger.info(f"All {len(self.input_batch.req_ids)} requests have first decode logits, "
+                        "achieving true zero-compute first decode")
+
+                # 直接从KV connector获取预计算的 logits
+                logits_list = []
+                if has_kv_transfer_group():
+                    for req in scheduler_output.scheduled_new_reqs:
+                        provided_logits = get_kv_transfer_group().try_consume_first_decode_logits(req.prompt_token_ids)
+                        if provided_logits is not None:
+                            logits_list.append(provided_logits)
+                        else:
+                            # This should not happen if scheduler correctly identified all requests
+                            raise RuntimeError(f"Expected precomputed logits for request {req_id} but none found")
+                    
+                    logits = torch.stack(logits_list)
+                    
+                    # 处理 KV connector 的潜在传输
+                    finished_sending, finished_recving = (
+                        self.get_finished_kv_transfers(scheduler_output))
+                else:
+                    # This should not happen if we have precomputed_logits_req_ids but no KV connector
+                    raise RuntimeError("Precomputed logits requests found but no KV transfer group available")
                 
-                logits = torch.stack(logits_list)
-                
-                # 处理 KV connector 的潜在传输
-                finished_sending, finished_recving = (
-                    self.get_finished_kv_transfers(scheduler_output))
-            else:
-                # This should not happen if we have precomputed_logits_req_ids but no KV connector
-                raise RuntimeError("Precomputed logits requests found but no KV transfer group available")
-            
-            hidden_states = None  # 没有实际的 hidden states
-            
+                hidden_states = None  # 没有实际的 hidden states
+                attn_metadata = None
+                logits_indices = None
+                spec_decode_metadata = None
+
+
         else:
-            # 处理混合批次或完全计算批次
-            # 由于调度器已经处理了预计算logits的请求，我们只需要对所有请求进行前向传播
+            # mixed batch or fully computed batch (mixed computed logits or no logits)
+
+            # Prepare the decoder inputs.
+            attn_metadata, logits_indices, spec_decode_metadata = (
+                self._prepare_inputs(scheduler_output))
+            num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+            
             
             if self.is_multimodal_model:
                 # Run the multimodal encoder if any.
@@ -1195,6 +1201,29 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # Compute logits for all requests (scheduler handles precomputed logits)
             sample_hidden_states = hidden_states[logits_indices]
             logits = self.model.compute_logits(sample_hidden_states, None)
+            
+            # Publish first decode logits for requests that just completed prefill
+            if has_kv_transfer_group():
+                kv_connector = get_kv_transfer_group()
+                for i, req_id in enumerate(self.input_batch.req_ids):
+                    # Skip if we've already published logits for this request
+                    if req_id in self.published_first_decode_logits:
+                        continue
+                        
+                    req_state = self.requests[req_id]
+                    num_scheduled_tokens = scheduler_output.num_scheduled_tokens[req_id]
+                    num_prompt_tokens = len(req_state.prompt_token_ids)
+                    
+                    # Check if this request just completed prefill
+                    # A request completes prefill when: num_computed_tokens + num_scheduled_tokens >= num_prompt_tokens
+                    if (req_state.num_computed_tokens + num_scheduled_tokens >= num_prompt_tokens and
+                        req_state.num_computed_tokens < num_prompt_tokens):
+                        # This request just completed prefill in this step
+                        # Get the logits for the last prompt token
+                        last_prompt_logits = logits[i]
+                        kv_connector.publish_first_decode_logits(req_id, last_prompt_logits)
+                        # Mark this request as having published first decode logits
+                        self.published_first_decode_logits.add(req_id)
             
             # 如果有预计算logits的请求，替换对应的logits
             if precomputed_logits_req_ids and has_kv_transfer_group():
@@ -1558,15 +1587,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             offset = self.query_start_loc_np[req_idx].item()
             prompt_hidden_states = hidden_states[offset:offset + num_logits]
             logits = self.model.compute_logits(prompt_hidden_states, None)
-            
-            # Publish first decode logits for zero-compute decode if this is the last chunk
-            if (req_id in completed_prefill_reqs and 
-                has_kv_transfer_group() and
-                num_logits > 0):
-                # Get the last prompt token's hidden state and compute its logits
-                last_hidden = prompt_hidden_states[-1:]
-                last_logits = self.model.compute_logits(last_hidden, None).squeeze(0)
-                get_kv_transfer_group().publish_first_decode_logits(req_id, last_logits)
 
             # Get the "target" tokens for each index. For prompt at index i,
             # the token at prompt index i+1 is the "sampled" token we want

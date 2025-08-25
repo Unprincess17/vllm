@@ -205,11 +205,10 @@ class Scheduler(SchedulerInterface):
                 self.max_model_len - request.num_computed_tokens)
 
             # Check if first decode logits are available for zero-compute first decode
-            has_logits = (self.connector is not None and 
-                         self.connector.has_first_decode_logits(request))
-            if has_logits:
-                # Mark this request as having precomputed logits
-                request.has_first_decode_logits = True
+            if not request.has_first_decode_logits and self.connector is not None:
+                if self.connector.has_first_decode_logits(request):
+                    request.has_first_decode_logits = True
+            has_logits = request.has_first_decode_logits
 
             # Schedule encoder inputs.
             encoder_inputs_to_schedule = None
@@ -718,7 +717,8 @@ class Scheduler(SchedulerInterface):
         for request in self.running:
             req_id = request.request_id
             num_tokens_scheduled = num_scheduled_tokens.get(req_id, 0)
-            if num_tokens_scheduled == 0:
+            has_precomputed_logits = req_id in scheduler_output.precomputed_logits_req_ids
+            if num_tokens_scheduled == 0 and not has_precomputed_logits:
                 # The request was not scheduled in this step.
                 new_running.append(request)
                 continue

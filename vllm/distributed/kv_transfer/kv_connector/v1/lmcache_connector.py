@@ -186,9 +186,6 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
             forward_context (ForwardContext): the forward context.
             **kwargs: additional arguments for the load operation
         """
-        if self._layeraware_enabled:
-            logger.debug("🚀 Starting layer-wise KV loading...")
-        
         self._lmcache_engine.start_load_kv(forward_context, **kwargs)
 
     def wait_for_layer_load(self, layer_name: str) -> None:
