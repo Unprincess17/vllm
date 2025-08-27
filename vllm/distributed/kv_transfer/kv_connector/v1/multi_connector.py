@@ -128,10 +128,11 @@ class MultiConnector(KVConnectorBase_V1):
         self,
         request: "Request",
         num_computed_tokens: int,
+        **kwargs,
     ) -> tuple[int, bool]:
         for c in self._connectors:
             toks, load_async = c.get_num_new_matched_tokens(
-                request, num_computed_tokens)
+                request, num_computed_tokens, **kwargs)
             # The first connector that has new matched tokens will be assigned
             # to this request.
             if toks > 0:

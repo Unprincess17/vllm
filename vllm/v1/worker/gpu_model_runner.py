@@ -1202,40 +1202,44 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             sample_hidden_states = hidden_states[logits_indices]
             logits = self.model.compute_logits(sample_hidden_states, None)
             
-            # Publish first decode logits for requests that just completed prefill
-            if has_kv_transfer_group():
-                kv_connector = get_kv_transfer_group()
-                for i, req_id in enumerate(self.input_batch.req_ids):
-                    # Skip if we've already published logits for this request
-                    if req_id in self.published_first_decode_logits:
-                        continue
+            if not self.vllm_config.skip_logits:
+                # TODO(shufan): refactor. Prefiller and decoder goes different paths.
+
+                # Prefiller: Publish first decode logits for requests that just completed prefill
+                if has_kv_transfer_group():
+                    kv_connector = get_kv_transfer_group()
+                    for i, req_id in enumerate(self.input_batch.req_ids):
+                        # Skip if we've already published logits for this request
+                        if req_id in self.published_first_decode_logits:
+                            continue
+                            
+                        req_state = self.requests[req_id]
+                        num_scheduled_tokens = scheduler_output.num_scheduled_tokens[req_id]
+                        num_prompt_tokens = len(req_state.prompt_token_ids)
                         
-                    req_state = self.requests[req_id]
-                    num_scheduled_tokens = scheduler_output.num_scheduled_tokens[req_id]
-                    num_prompt_tokens = len(req_state.prompt_token_ids)
-                    
-                    # Check if this request just completed prefill
-                    # A request completes prefill when: num_computed_tokens + num_scheduled_tokens >= num_prompt_tokens
-                    if (req_state.num_computed_tokens + num_scheduled_tokens >= num_prompt_tokens and
-                        req_state.num_computed_tokens < num_prompt_tokens):
-                        # This request just completed prefill in this step
-                        # Get the logits for the last prompt token
-                        last_prompt_logits = logits[i]
-                        kv_connector.publish_first_decode_logits(req_id, last_prompt_logits)
-                        # Mark this request as having published first decode logits
-                        self.published_first_decode_logits.add(req_id)
-            
-            # 如果有预计算logits的请求，替换对应的logits
-            if precomputed_logits_req_ids and has_kv_transfer_group():
-                kv_connector = get_kv_transfer_group()
-                for i, req_id in enumerate(self.input_batch.req_ids):
-                    if req_id in precomputed_logits_req_ids:
-                        provided_logits = kv_connector.try_consume_first_decode_logits(req_id)
-                        if provided_logits is not None:
-                            logits[i] = provided_logits
-                        else:
-                            # Log warning but continue with computed logits
-                            logger.warning(f"Expected precomputed logits for request {req_id} but none found")
+                        # Check if this request just completed prefill
+                        # A request completes prefill when: num_computed_tokens + num_scheduled_tokens >= num_prompt_tokens
+                        if (req_state.num_computed_tokens + num_scheduled_tokens >= num_prompt_tokens and
+                            req_state.num_computed_tokens < num_prompt_tokens):
+                            # This request just completed prefill in this step
+                            # Get the logits for the last prompt token
+                            last_prompt_logits = logits[i]
+                            kv_connector.publish_first_decode_logits(req_id, last_prompt_logits)
+                            # Mark this request as having published first decode logits
+                            self.published_first_decode_logits.add(req_id)
+                
+                # Decoder: Replace logits for requests with precomputed logits
+                if precomputed_logits_req_ids and has_kv_transfer_group():
+                    kv_connector = get_kv_transfer_group()
+                    # TODO(shufan): try_consume_first_decode_logits should take a tokens list, instead of the req_id
+                    for i, req_id in enumerate(self.input_batch.req_ids):
+                        if req_id in precomputed_logits_req_ids:
+                            provided_logits = kv_connector.try_consume_first_decode_logits(req_id)
+                            if provided_logits is not None:
+                                logits[i] = provided_logits
+                            else:
+                                # Log warning but continue with computed logits
+                                logger.warning(f"Expected precomputed logits for request {req_id} but none found")
 
         # Apply structured output bitmasks if present
         if scheduler_output.grammar_bitmask is not None:

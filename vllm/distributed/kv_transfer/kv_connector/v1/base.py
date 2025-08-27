@@ -226,6 +226,7 @@ class KVConnectorBase_V1(ABC):
         self,
         request: "Request",
         num_computed_tokens: int,
+        **kwargs,
     ) -> tuple[int, bool]:
         """
         Get number of new tokens that can be loaded from the

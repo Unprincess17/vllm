@@ -365,7 +365,7 @@ class Scheduler(SchedulerInterface):
                 num_external_computed_tokens, load_kv_async = (
                     (0, False) if self.connector is None else
                     self.connector.get_num_new_matched_tokens(
-                        request, num_native_computed_tokens))
+                        request, num_native_computed_tokens, skip_logits=self.vllm_config.skip_logits))
 
                 # Total computed tokens (local + external).
                 num_computed_tokens = (num_native_computed_tokens +
@@ -391,7 +391,7 @@ class Scheduler(SchedulerInterface):
                     num_new_tokens = min(num_new_tokens, token_budget)
                     
                     # Check if first decode logits are available for zero-compute first decode
-                    has_logits = (self.connector is not None and 
+                    has_logits = (not self.vllm_config.skip_logits and self.connector is not None and 
                                  self.connector.has_first_decode_logits(request))
                     if has_logits:
                         # Mark this request as having precomputed logits

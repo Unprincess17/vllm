@@ -106,6 +106,7 @@ class LMCacheConnectorV1(KVConnectorBase_V1):
         self,
         request: "Request",
         num_computed_tokens: int,
+        **kwargs,
     ) -> tuple[int, bool]:
         """
         Get number of new tokens that can be loaded from the
@@ -121,7 +122,7 @@ class LMCacheConnectorV1(KVConnectorBase_V1):
             external KV cache beyond what is already computed.
         """
         return self._lmcache_engine.get_num_new_matched_tokens(
-            request, num_computed_tokens)
+            request, num_computed_tokens, **kwargs)
 
     def update_state_after_alloc(self, request: "Request",
                                  blocks: "KVCacheBlocks",
@@ -259,6 +260,7 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
         self,
         request: "Request",
         num_computed_tokens: int,
+        **kwargs,
     ) -> tuple[int, bool]:
         """
         Get number of new tokens that can be loaded from the
@@ -274,7 +276,7 @@ class LMCacheConnectorV2(KVConnectorBase_V1):
             - should_load_async: True if layer-wise loading should begin
         """
         return self._lmcache_engine.get_num_new_matched_tokens(
-            request, num_computed_tokens)
+            request, num_computed_tokens, **kwargs)
 
     def has_first_decode_logits(self, request: "Request") -> bool:
         """

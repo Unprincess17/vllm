@@ -39,6 +39,7 @@
 					"--disable-log-requests",
 					"--enforce-eager",
 					"--gpu-memory-utilization", "0.6",
+					"--skip-logits",
 					"--kv-transfer-config",
 					"{\"kv_connector\":\"LMCacheConnectorV2\",\"kv_role\":\"kv_producer\",\"kv_connector_extra_config\": {\"discard_partial_chunks\": false, \"lmcache_rpc_port\": \"producer1\"}}",
 				]
@@ -68,6 +69,7 @@
 					"--disable-log-requests",
 					"--enforce-eager",
 					"--gpu-memory-utilization", "0.6",
+					"--skip-logits",
 					"--kv-transfer-config",
 					"{\"kv_connector\":\"LMCacheConnectorV2\",\"kv_role\":\"kv_consumer\",\"kv_connector_extra_config\": {\"discard_partial_chunks\": false, \"lmcache_rpc_port\": \"consumer1\", \"pd_disaggregated\": true}}",
 				]

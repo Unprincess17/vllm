@@ -4053,6 +4053,9 @@ class VllmConfig:
     """The configurations for distributed KV cache transfer."""
     kv_events_config: Optional[KVEventsConfig] = None
     """The configurations for event publishing."""
+    skip_logits: bool = True
+    """Whether to skip publishing logits during KV cache transfer. When True,
+    the publish_first_decode_logits and try_consume_first_decode_logits functions will not be called."""
     # some opaque config, only used to provide additional information
     # for the hash computation, mainly used for testing, debugging or out of
     # tree config registration.
