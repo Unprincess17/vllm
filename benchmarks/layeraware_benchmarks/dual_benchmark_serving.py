@@ -46,9 +46,9 @@ def run_benchmark(command, benchmark_name):
 
 def main():
     # Define the two benchmark commands
-    benchmark1_cmd = """python benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8100"""
+    benchmark1_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8100 --save-result --result-dir ./results --result-filename disagg_prefill_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
     
-    benchmark2_cmd = """python benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8200"""
+    benchmark2_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8200 --save-result --result-dir ./results --result-filename disagg_decode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
     
     print("=" * 80)
     print("Starting dual benchmark execution")
