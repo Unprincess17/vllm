@@ -200,6 +200,9 @@ hip_compat.h
 # Benchmark dataset
 benchmarks/**/*.json
 
+# Benchmark reports
+benchmarks/layeraware_benchmarks/*.nsys-rep
+
 # Linting
 actionlint
 shellcheck*/
