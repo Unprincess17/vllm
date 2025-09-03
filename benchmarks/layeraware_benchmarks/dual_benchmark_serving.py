@@ -44,18 +44,11 @@ def run_benchmark(command, benchmark_name):
         return 1
 
 
-def main():
+def simultaneous_benchmark():
     # Define the two benchmark commands
-    benchmark1_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8100 --save-result --result-dir ./results --result-filename disagg_prefill_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
+    benchmark1_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8100 --save-result --result-dir ./results --result-filename simu_prefill_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
     
-    benchmark2_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8200 --save-result --result-dir ./results --result-filename disagg_decode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
-    
-    print("=" * 80)
-    print("Starting dual benchmark execution")
-    print("=" * 80)
-    print(f"Benchmark 1 (Port 8100): {benchmark1_cmd}")
-    print(f"Benchmark 2 (Port 8200): {benchmark2_cmd}")
-    print("=" * 80)
+    benchmark2_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8200 --save-result --result-dir ./results --result-filename simu_decode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
     
     # Create threads for each benchmark
     thread1 = threading.Thread(
@@ -69,7 +62,6 @@ def main():
     )
     
     # Start both threads
-    start_time = time.time()
     thread1.start()
     thread2.start()
     
@@ -77,13 +69,24 @@ def main():
     thread1.join()
     thread2.join()
     
-    end_time = time.time()
-    total_duration = end_time - start_time
-    
-    print("=" * 80)
-    print(f"Both benchmarks completed in {total_duration:.2f} seconds")
-    print("=" * 80)
+def sequential_benchmark():
+    benchmark1_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8100 --save-result --result-dir ./results --result-filename seq_prefill_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
 
+    benchmark2_cmd = f"""python ../benchmark_serving_no_test.py --seed 22 --model LLM-Research/Llama-3.2-1B-Instruct --dataset-name sonnet --random-input-len 7500 --random-output-len 200 --dataset-path ../sonnet_4x.txt --sonnet-input-len 2048 --sonnet-output-len 1 --sonnet-prefix-len 50 --num-prompts 1 --burstiness 1 --request-rate 10 --port 8200 --save-result --result-dir ./results --result-filename seq_decode_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json"""
+
+    run_benchmark(benchmark1_cmd, "BENCHMARK-PREFILL")
+    run_benchmark(benchmark2_cmd, "BENCHMARK-DECODE")
 
 if __name__ == "__main__":
-    main()
+    benchmark = simultaneous_benchmark
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "simu":
+            benchmark = simultaneous_benchmark
+        elif sys.argv[1] == "seq":
+            benchmark = sequential_benchmark
+
+    start_time = time.time()
+    benchmark()
+    end_time = time.time()
+    print(f"Total time taken: {end_time - start_time} seconds")
+

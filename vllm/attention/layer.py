@@ -19,7 +19,7 @@ from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig)
 from vllm.model_executor.layers.quantization.kv_cache import BaseKVCacheMethod
 from vllm.platforms import _Backend, current_platform
-from vllm.utils import direct_register_custom_op
+from vllm.utils import direct_register_custom_op, _vllm_nvtx_annotate
 
 
 class Attention(nn.Module):
@@ -336,7 +336,7 @@ class MultiHeadAttention(nn.Module):
 
         return out.reshape(bsz, q_len, -1)
 
-
+@_vllm_nvtx_annotate
 def wait_for_kv_layer_from_connector(layer_name: str):
     if not has_kv_transfer_group() or not is_v1_kv_transfer_group():
         return
@@ -350,7 +350,7 @@ def wait_for_kv_layer_from_connector(layer_name: str):
     assert isinstance(attn_metadata, dict)
     connector.wait_for_layer_load(layer_name)
 
-
+@_vllm_nvtx_annotate
 def maybe_save_kv_layer_to_connector(
     layer_name: str,
     kv_cache_layer: List[torch.Tensor],

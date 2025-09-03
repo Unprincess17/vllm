@@ -37,7 +37,7 @@ wait_for_server() {
 
 benchmark() {
 
-  export VLLM_LOGGING_LEVEL=DEBUG
+  # export VLLM_LOGGING_LEVEL=DEBUG
   export VLLM_HOST_IP=$(hostname -I | awk '{print $1}')
 
   # compare chunked prefill with disaggregated prefill
@@ -51,6 +51,7 @@ benchmark() {
   prefix_len=50
   input_len=2048
   output_len=$2
+  benchmark_type=$3
 
 
 
@@ -99,7 +100,7 @@ benchmark() {
   wait_for_server 8100
   wait_for_server 8200
 
-  python3 ./dual_benchmark_serving.py
+  python3 ./dual_benchmark_serving.py $benchmark_type
 
   kill_gpu_processes
 }
@@ -122,7 +123,9 @@ main() {
 
   default_qps=10
   default_output_len=1
-  benchmark $default_qps $default_output_len
+  # benchmark type: simu, seq
+  benchmark_type=${1:-"simu"}
+  benchmark $default_qps $default_output_len $benchmark_type
 
 }
 

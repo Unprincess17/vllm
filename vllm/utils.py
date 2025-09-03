@@ -63,6 +63,8 @@ from packaging.version import Version
 from torch.library import Library
 from typing_extensions import Never, ParamSpec, TypeIs, assert_never
 
+from nvtx import annotate  # type: ignore
+
 import vllm.envs as envs
 # NOTE: import triton_utils to make TritonPlaceholderModule work
 #       if triton is unavailable
@@ -2768,3 +2770,21 @@ def is_torch_equal_or_newer(target: str) -> bool:
     except Exception:
         # Fallback to PKG-INFO to load the package info, needed by the doc gen.
         return Version(importlib.metadata.version('torch')) >= Version(target)
+
+##### NVTX annotation #####
+_NVTX_COLORS = ["green", "blue", "purple", "rapids"]
+
+def _get_color_for_nvtx(name):
+    m = hashlib.sha256()
+    m.update(name.encode())
+    hash_value = int(m.hexdigest(), 16)
+    idx = hash_value % len(_NVTX_COLORS)
+    return _NVTX_COLORS[idx]
+
+def _vllm_nvtx_annotate(func, domain=" vllm"):
+    """Decorator for applying nvtx annotations to methods in vllm."""
+    return annotate(
+        message=func.__qualname__,
+        color=_get_color_for_nvtx(func.__qualname__),
+        domain=domain,
+    )(func)
