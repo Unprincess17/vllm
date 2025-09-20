@@ -1,3 +1,75 @@
+# Prefill Latency Estimator
+
+Estimate prompt prefill latency for decoder-only Transformers using a compute vs. memory roofline model.
+
+## Install
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e .
+```
+
+If you are not packaging, you can also run the CLI module directly:
+
+```bash
+python -m prefill_model.cli --help
+```
+
+## Usage
+
+Example for a 70B-ish config (L=80, d=8192) on an H100 class GPU:
+
+```bash
+python -m prefill_model.cli \
+  --layers 80 --hidden 8192 --heads 64 \
+  --seq 4096 --batch 1 --dtype-bytes 2 --ffn-ratio 4 \
+  --tflops 1000 --mem-gbps 3000 --util-compute 0.6 --util-bw 0.85 \
+  --flash-attn --overhead-us 15
+```
+
+Output resembles:
+
+```
+Predicted prefill time: 123.45 ms
+Breakdown:
+  Total FLOPs: 12.345 TFLOPs
+  Total bytes: 67.890 GB
+  Compute time: 100.00 ms
+  Memory time:  90.00 ms
+  Overheads:    23.45 ms
+  Memory bytes:
+    weights:     1.234 GB
+    kv_write:    2.468 GB
+    attention:   60.000 GB
+    activations: 4.188 GB
+```
+
+## Model
+
+We approximate per-layer costs for batch B, sequence S, hidden d, expansion r:
+
+- Compute MACs per layer: `(4 + 2r) * B * S * d^2 + 2 * B * S^2 * d`.
+- FLOPs = `2 * MACs`.
+- Memory bytes:
+  - Weights: `[(4 + 2r) * d^2] * bytes` per layer (read once per sequence)
+  - KV cache writes: `[2 * B * S * d] * bytes` per layer
+  - Attention traffic: FlashAttention: `O(B S d)`; naive: `O(B S^2 d)` with a small constant
+  - Activations: `O(B S d)` with a tunable factor
+
+The roofline estimate takes the max of compute_time and memory_time plus layer overheads.
+
+## Tuning
+
+Use multipliers to match your kernels and stack:
+
+- `--kv-write-mul`, `--weight-read-mul` to capture tensor parallel and caching effects.
+- `--act-bytes-factor` and `--attn-mem-factor` to fit observed traffic from profilers.
+- `--util-compute` and `--util-bw` for realized efficiency.
+
+## Disclaimer
+
+This is a first-order estimator with conservative constants. Validate with profiling for your kernels, precision, and execution stack.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/source/assets/logos/vllm-logo-text-dark.png">
