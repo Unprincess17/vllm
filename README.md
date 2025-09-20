@@ -1,3 +1,81 @@
+Prefill Estimator
+=================
+
+Estimate LLM prompt prefill time using a simple FLOPs + KV-write bandwidth model.
+
+What it models
+--------------
+
+- Compute: approximate per-layer forward FLOPs for prefill over a sequence of length n
+  - FLOPs_layer ≈ 12 · n · d_model^2 · (ffn_multiple / 4) + 2 · n^2 · d_model
+  - Total FLOPs ≈ num_layers × sum_over_batch(FLOPs_layer)
+- Memory: KV cache writes during prefill
+  - Bytes ≈ n · num_layers · 2 · d_model · kv_bytes_per_elem
+- Bottleneck time: max(total_flops / effective_flops_per_s, total_kv_bytes / effective_write_Bps)
+
+Assumptions & caveats
+---------------------
+
+- Simplified constants; real kernels, tensor parallelism, throughput vs latency, padding, and activation checkpointing are not modeled.
+- Utilization is user-tunable; default 0.35 is a conservative starting point for prefill.
+- MoE models: effective FFN cost approximated by active_experts × expert_multiple.
+- Precision affects both compute and KV bytes via bytes_per_elem/kv_bytes_per_elem.
+
+Quickstart
+----------
+
+Examples with presets:
+
+```bash
+python -m prefill_estimator.cli --model-preset llama2-7b --hw-preset a100-80g --batch-size 1 --avg-seq-len 2048
+```
+
+Custom model and hardware:
+
+```bash
+python -m prefill_estimator.cli --layers 32 --d-model 4096 --heads 32 \
+  --gpu-tflops 312 --bandwidth 2039 --util 0.35 --write-eff 0.8 \
+  --batch-size 2 --avg-seq-len 1024
+```
+
+JSON output:
+
+```bash
+python -m prefill_estimator.cli --model-preset mixtral-8x7b --hw-preset a100-80g --seq-lens 512,1536 --json
+```
+
+CLI options
+-----------
+
+Run:
+
+```bash
+python -m prefill_estimator.cli --help
+```
+
+API usage
+---------
+
+```python
+from prefill_estimator import ModelConfig, HardwareConfig, WorkloadConfig, estimate_prefill_time, pretty_print_results
+
+model = ModelConfig(num_layers=32, d_model=4096, num_heads=32, ffn_multiple=4.0)
+hw = HardwareConfig(gpu_flops_tflops=312.0, compute_utilization=0.35, mem_bandwidth_GBps=2039.0)
+workload = WorkloadConfig(batch_size=1, avg_seq_len=2048)
+
+res = estimate_prefill_time(model, hw, workload)
+print(pretty_print_results(res))
+```
+
+Notes on selecting parameters
+-----------------------------
+
+- gpu_flops_tflops: Use the theoretical FP16/BF16 TFLOPS for your GPU SKU.
+- compute_utilization: Empirical factor; 0.3–0.6 common for prefill depending on stack.
+- mem_bandwidth_GBps: Sustained HBM bandwidth; published peak minus overhead.
+- write_efficiency: 0.7–0.9 for well-optimized KV writes.
+- bytes_per_elem/kv_bytes_per_elem: 2 for fp16/bf16, 1 for fp8 (if used), 4 for fp32.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/vllm/main/docs/source/assets/logos/vllm-logo-text-dark.png">
